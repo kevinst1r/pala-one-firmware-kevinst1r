@@ -123,44 +123,6 @@ static void handleSleepThumb() {
 }
 
 // ============================================================================
-//  GET /screensavers/download — stream the raw 3904-byte XBM bin so users can
-//  share screensavers between devices.
-// ============================================================================
-static void handleSleepDownload() {
-  uint8_t buf[Screensavers::SCREENSAVER_BYTES];
-  bool gotBytes = false;
-  String filename = "screensaver.bin";
-
-  if (server.hasArg("single")) {
-    File f = FS.open("/sleep.bin", "r");
-    if (f && f.size() >= (size_t)Screensavers::SCREENSAVER_BYTES) {
-      gotBytes = (f.read(buf, Screensavers::SCREENSAVER_BYTES) ==
-                  (size_t)Screensavers::SCREENSAVER_BYTES);
-    }
-    if (f) f.close();
-    filename = "sleep.bin";
-  } else if (server.hasArg("slot")) {
-    int slot = server.arg("slot").toInt();
-    gotBytes = Screensavers::readSlot(slot, buf);
-    filename = "screensaver-" + String(slot) + ".bin";
-  }
-
-  if (!gotBytes) {
-    server.send(404, "text/plain; charset=utf-8", "Screensaver not found");
-    return;
-  }
-
-  server.sendHeader(
-    "Content-Disposition",
-    String("attachment; filename=\"") + filename + "\""
-  );
-  server.setContentLength(Screensavers::SCREENSAVER_BYTES);
-  server.send(200, "application/octet-stream", "");
-  WiFiClient client = server.client();
-  client.write(buf, Screensavers::SCREENSAVER_BYTES);
-}
-
-// ============================================================================
 //  POST /screensavers/delete — remove a slot or the legacy single image.
 // ============================================================================
 static void handleSleepDelete() {
@@ -300,50 +262,8 @@ static const char kEditorStyle[] PROGMEM =
   ".ss-slot{border:1px solid var(--line-soft);border-radius:10px;padding:8px;background:var(--stat-bg);display:flex;flex-direction:column;gap:6px;align-items:center}"
   ".ss-slot img{width:100%;height:auto;border:1px solid var(--line);border-radius:6px;background:#fff;image-rendering:pixelated}"
   ".ss-slot .ss-slot-empty{width:100%;aspect-ratio:250/122;display:flex;align-items:center;justify-content:center;border:1px dashed var(--line);border-radius:6px;color:var(--muted);font-size:12px}"
-  ".ss-slot-actions{display:flex;gap:6px;width:100%;justify-content:center;align-items:center}"
-  ".ss-icon-btn{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;padding:0;border-radius:8px;background:var(--btn-sec-bg);color:var(--btn-sec-fg);border:1px solid var(--btn-sec-bd);text-decoration:none;cursor:pointer;flex-shrink:0}"
-  ".ss-icon-btn:hover{opacity:.88}"
-  ".ss-icon-btn svg{width:16px;height:16px;display:block}"
-  ".ss-preview-tools{display:flex;flex-wrap:wrap;gap:8px;align-items:center}"
   "@media(max-width:560px){.ss-grid{grid-template-columns:1fr}}"
   "</style>";
-
-static const char kSvgDownload[] PROGMEM =
-  "<svg viewBox='0 0 24 24' aria-hidden='true'><path d='M12 4v9m0 0l3.5-3.5M12 13l-3.5-3.5M5 19h14' "
-  "fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/></svg>";
-
-static const char kSvgTrash[] PROGMEM =
-  "<svg viewBox='0 0 24 24' aria-hidden='true'><path d='M4 7h16M9 7V5h6v2M7 7l1 13h8l1-13' "
-  "fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/></svg>";
-
-// Download + delete icon buttons for a populated slot or the legacy single image.
-static String slotActionsHtml(bool single, int slot) {
-  String dl = single ? "/screensavers/download?single=1"
-                     : "/screensavers/download?slot=" + String(slot);
-  String fn = single ? "sleep.bin" : ("screensaver-" + String(slot) + ".bin");
-  const char* confirm = single ? D_WEB_SS_CONFIRM_DEL_SINGLE : D_WEB_SS_CONFIRM_DEL_SLOT;
-
-  String out;
-  out.reserve(420);
-  out += "<div class='ss-slot-actions'>";
-  out += "<a class='ss-icon-btn' href='" + dl + "' download='" + fn + "' ";
-  out += "aria-label='" D_WEB_SS_DOWNLOAD_ARIA "' title='" D_WEB_SS_DOWNLOAD_ARIA "'>";
-  out += FPSTR(kSvgDownload);
-  out += "</a>";
-  out += "<form method='POST' action='/screensavers/delete' style='margin:0'>";
-  if (single) {
-    out += "<input type='hidden' name='single' value='1'>";
-  } else {
-    out += "<input type='hidden' name='slot' value='" + String(slot) + "'>";
-  }
-  out += "<button type='submit' class='ss-icon-btn' aria-label='" D_WEB_SS_DELETE_ARIA "' ";
-  out += "title='" D_WEB_SS_DELETE_ARIA "' onclick=\"return confirm('";
-  out += confirm;
-  out += "')\">";
-  out += FPSTR(kSvgTrash);
-  out += "</button></form></div>";
-  return out;
-}
 
 static const char kEditorScript[] PROGMEM =
   "<script>(function(){"
@@ -364,23 +284,21 @@ static const char kEditorScript[] PROGMEM =
   "var meta=document.getElementById('ssMeta');"
   "var status=document.getElementById('ssUploadStatus');"
   "var resetBtn=document.getElementById('ssResetBtn');"
-  "var rotateBtn=document.getElementById('ssRotateBtn');"
   "var uploadBtn=document.getElementById('ssUploadBtn');"
   "var dstSel=document.getElementById('ssDestination');"
   "if(!fileInput||!tol||!zoom||!panX||!panY||!inv||!canvas||!meta||!status||!resetBtn||!uploadBtn)return;"
   "var ctx=canvas.getContext('2d',{willReadFrequently:true});"
   "var work=document.createElement('canvas');work.width=W;work.height=H;"
   "var workCtx=work.getContext('2d',{willReadFrequently:true});"
-  "var sourceImage=null,rotation=0;"
+  "var sourceImage=null;"
   "var isDragging=false,dragStartX=0,dragStartY=0,dragPanX=0,dragPanY=0;"
   "var pointers={};"
   "var pinch={active:false,startDist:0,startZoom:100,startPanX:0,startPanY:0,startMidX:0,startMidY:0};"
   "function clamp(v,a,b){return v<a?a:(v>b?b:v)}"
   "function thr(o){o=clamp(parseInt(o||0,10)||0,-100,100);return clamp(128+Math.round(o*(255-128)/100),0,255)}"
   "function setLbls(){var t=parseInt(tol.value,10)||0;tolLbl.textContent=(t>0?'+':'')+t+'%';zoomLbl.textContent=zoom.value+'%';panXLbl.textContent=panX.value+' px';panYLbl.textContent=panY.value+' px';}"
-  "function effDims(){if(!sourceImage)return {w:1,h:1};var r=rotation%4;return (r===1||r===3)?{w:sourceImage.height,h:sourceImage.width}:{w:sourceImage.width,h:sourceImage.height};}"
   "function fit(){if(!sourceImage)return;zoom.value='100';panX.value='0';panY.value='0';setLbls();render();}"
-  "function drawToWork(){workCtx.fillStyle='#fff';workCtx.fillRect(0,0,W,H);if(!sourceImage)return;var ed=effDims();var base=Math.min(W/ed.w,H/ed.h);var s=base*((parseInt(zoom.value,10)||100)/100);if(!isFinite(s)||s<=0)s=base;var dw=Math.max(1,Math.round(sourceImage.width*s));var dh=Math.max(1,Math.round(sourceImage.height*s));var px=parseInt(panX.value,10)||0,py=parseInt(panY.value,10)||0;workCtx.save();workCtx.translate(W/2+px,H/2+py);workCtx.rotate(rotation*Math.PI/2);workCtx.drawImage(sourceImage,-dw/2,-dh/2,dw,dh);workCtx.restore();}"
+  "function drawToWork(){workCtx.fillStyle='#fff';workCtx.fillRect(0,0,W,H);if(!sourceImage)return;var base=Math.min(W/sourceImage.width,H/sourceImage.height);var s=base*((parseInt(zoom.value,10)||100)/100);if(!isFinite(s)||s<=0)s=base;var dw=Math.max(1,Math.round(sourceImage.width*s));var dh=Math.max(1,Math.round(sourceImage.height*s));var x=((W-dw)/2)+(parseInt(panX.value,10)||0);var y=((H-dh)/2)+(parseInt(panY.value,10)||0);workCtx.drawImage(sourceImage,x,y,dw,dh);}"
   "function toOneBit(){var img=workCtx.getImageData(0,0,W,H),d=img.data,t=thr(tol.value),iv=!!inv.checked;for(var i=0;i<d.length;i+=4){var L=((d[i]*299)+(d[i+1]*587)+(d[i+2]*114))/1000;var w=(L>=t);if(iv)w=!w;var c=w?255:0;d[i]=c;d[i+1]=c;d[i+2]=c;d[i+3]=255;}ctx.putImageData(img,0,0);return img;}"
   "function pack(img){var d=img.data,o=new Uint8Array(TOTAL);for(var y=0;y<H;y++)for(var x=0;x<W;x++){var i=(y*W+x)*4;if(d[i]>=128){var b=(y*ROW)+(x>>3);o[b]=o[b]|(1<<(x&7));}}return o;}"
   "function render(){setLbls();drawToWork();var i=toOneBit();if(!sourceImage){meta.textContent='No image loaded';return null;}meta.textContent='Preview: '+W+'x'+H+'  threshold '+thr(tol.value)+'  bytes '+TOTAL;return i;}"
@@ -388,10 +306,9 @@ static const char kEditorScript[] PROGMEM =
   "function dist(a,b){var dx=a.x-b.x,dy=a.y-b.y;return Math.sqrt(dx*dx+dy*dy);}"
   "function mid(a,b){return{x:(a.x+b.x)/2,y:(a.y+b.y)/2};}"
   "function startPinch(){var p=pts();if(p.length===2){pinch.active=true;pinch.startDist=Math.max(8,dist(p[0],p[1]));pinch.startZoom=parseInt(zoom.value,10)||100;pinch.startPanX=parseInt(panX.value,10)||0;pinch.startPanY=parseInt(panY.value,10)||0;var m=mid(p[0],p[1]);pinch.startMidX=m.x;pinch.startMidY=m.y;}else pinch.active=false;}"
-  "fileInput.addEventListener('change',function(){var f=fileInput.files&&fileInput.files[0];if(!f){sourceImage=null;rotation=0;render();return;}status.textContent='';var r=new FileReader();r.onload=function(){var im=new Image();im.onload=function(){sourceImage=im;rotation=0;fit();};im.onerror=function(){status.textContent='Could not decode image.';};im.src=r.result;};r.onerror=function(){status.textContent='Could not read image.';};r.readAsDataURL(f);});"
+  "fileInput.addEventListener('change',function(){var f=fileInput.files&&fileInput.files[0];if(!f){sourceImage=null;render();return;}status.textContent='';var r=new FileReader();r.onload=function(){var im=new Image();im.onload=function(){sourceImage=im;fit();};im.onerror=function(){status.textContent='Could not decode image.';};im.src=r.result;};r.onerror=function(){status.textContent='Could not read image.';};r.readAsDataURL(f);});"
   "[tol,zoom,panX,panY,inv].forEach(function(el){el.addEventListener('input',render);el.addEventListener('change',render);});"
   "resetBtn.addEventListener('click',function(){fit();status.textContent='';});"
-  "if(rotateBtn)rotateBtn.addEventListener('click',function(){if(!sourceImage)return;rotation=(rotation+1)%4;render();});"
   "canvas.addEventListener('pointerdown',function(e){pointers[e.pointerId]={x:e.clientX,y:e.clientY};canvas.setPointerCapture(e.pointerId);var p=pts();if(p.length===1){isDragging=true;dragStartX=e.clientX;dragStartY=e.clientY;dragPanX=parseInt(panX.value,10)||0;dragPanY=parseInt(panY.value,10)||0;}startPinch();});"
   "canvas.addEventListener('pointermove',function(e){if(!pointers[e.pointerId])return;pointers[e.pointerId].x=e.clientX;pointers[e.pointerId].y=e.clientY;var p=pts();if(pinch.active&&p.length===2){var d=Math.max(8,dist(p[0],p[1])),r=d/pinch.startDist;zoom.value=String(clamp(Math.round(pinch.startZoom*r),10,400));var m=mid(p[0],p[1]);panX.value=String(clamp(pinch.startPanX+Math.round(m.x-pinch.startMidX),-250,250));panY.value=String(clamp(pinch.startPanY+Math.round(m.y-pinch.startMidY),-180,180));render();return;}if(isDragging&&p.length===1){panX.value=String(clamp(dragPanX+Math.round(e.clientX-dragStartX),-250,250));panY.value=String(clamp(dragPanY+Math.round(e.clientY-dragStartY),-180,180));render();}});"
   "function endP(e){delete pointers[e.pointerId];var p=pts();if(p.length===1){isDragging=true;dragStartX=p[0].x;dragStartY=p[0].y;dragPanX=parseInt(panX.value,10)||0;dragPanY=parseInt(panY.value,10)||0;}else isDragging=false;startPinch();}"
@@ -415,7 +332,11 @@ static String slotGridHtml() {
     if (Screensavers::slotExists(i)) {
       out += "<img src='/screensavers/thumb?slot=" + String(i) +
              "' alt='" D_WEB_SS_SLOT_LABEL " " + String(i) + "'>";
-      out += slotActionsHtml(false, i);
+      out += "<form method='POST' action='/screensavers/delete' style='width:100%'>";
+      out += "<input type='hidden' name='slot' value='" + String(i) + "'>";
+      out += "<button type='submit' class='btn secondary' style='width:100%;padding:6px 10px;font-size:13px' "
+             "onclick=\"return confirm('" D_WEB_SS_CONFIRM_DEL_SLOT "')\">" D_WEB_DELETE_BUTTON "</button>";
+      out += "</form>";
     } else {
       out += "<div class='ss-slot-empty'>" D_WEB_SS_SLOT_EMPTY "</div>";
     }
@@ -454,10 +375,7 @@ static String editorCardHtml(int nextFreeSlot) {
          "<div class='ss-card ss-preview-wrap'>"
          "<label>" D_WEB_SS_PREVIEW_LABEL "</label>"
          "<div class='ss-preview-stage'><canvas id='ssPreview' width='250' height='122'></canvas></div>"
-         "<div class='ss-preview-tools'>"
-         "<button type='button' class='btn secondary' id='ssResetBtn' style='padding:6px 12px;font-size:13px'>" D_WEB_SS_RESET_FIT "</button>"
-         "<button type='button' class='btn secondary' id='ssRotateBtn' style='padding:6px 12px;font-size:13px'>" D_WEB_SS_ROTATE "</button>"
-         "</div>"
+         "<button type='button' class='btn secondary' id='ssResetBtn' style='align-self:flex-start;padding:6px 12px;font-size:13px'>" D_WEB_SS_RESET_FIT "</button>"
          "<div class='ss-meta' id='ssMeta'>" D_WEB_SS_NO_IMAGE "</div>"
          "</div>"
          "<div class='ss-card'>"
@@ -534,8 +452,11 @@ static void handleSleepEditorPage() {
     out += "<div class='row' style='align-items:center;gap:12px'>"
            "<img src='/screensavers/thumb?single=1' alt='" D_WEB_SS_SINGLE_ALT "' "
            "style='width:180px;border:1px solid var(--line);border-radius:8px;background:#fff;image-rendering:pixelated'>"
-           + slotActionsHtml(true, 0) +
-           "</div>";
+           "<form method='POST' action='/screensavers/delete'>"
+           "<input type='hidden' name='single' value='1'>"
+           "<button type='submit' class='btn secondary' "
+           "onclick=\"return confirm('" D_WEB_SS_CONFIRM_DEL_SINGLE "')\">" D_WEB_DELETE_BUTTON "</button>"
+           "</form></div>";
   } else {
     out += "<p class='muted'>" D_WEB_SS_NO_SINGLE "</p>";
   }
@@ -550,8 +471,7 @@ static void handleSleepEditorPage() {
 // ============================================================================
 void registerScreensaverRoutes() {
   server.on("/screensavers",         HTTP_GET,  handleSleepEditorPage);
-  server.on("/screensavers/thumb",     HTTP_GET,  handleSleepThumb);
-  server.on("/screensavers/download", HTTP_GET,  handleSleepDownload);
+  server.on("/screensavers/thumb",   HTTP_GET,  handleSleepThumb);
   server.on("/screensavers/delete",  HTTP_POST, handleSleepDelete);
   server.on("/screensavers/mode",    HTTP_POST, handleSleepModePost);
   server.on("/screensavers/upload",  HTTP_POST,

@@ -411,8 +411,5 @@
 #define D_WEB_SS_DST_SLOT_PREFIX    "Ranura de rotación "
 #define D_WEB_SS_DST_OVERWRITE      " (sobrescribir)"
 #define D_WEB_SS_UPLOAD_EDITED      "Subir imagen editada"
-#define D_WEB_SS_DOWNLOAD_ARIA      "Descargar salvapantallas"
-#define D_WEB_SS_DELETE_ARIA        "Eliminar salvapantallas"
-#define D_WEB_SS_ROTATE             "Girar 90\u00b0"
 
 #endif  // PALA_LANG_ES_LA_H

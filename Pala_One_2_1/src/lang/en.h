@@ -419,8 +419,5 @@
 #define D_WEB_SS_DST_SLOT_PREFIX    "Rotation slot "
 #define D_WEB_SS_DST_OVERWRITE      " (overwrite)"
 #define D_WEB_SS_UPLOAD_EDITED      "Upload edited image"
-#define D_WEB_SS_DOWNLOAD_ARIA      "Download screensaver"
-#define D_WEB_SS_DELETE_ARIA        "Delete screensaver"
-#define D_WEB_SS_ROTATE             "Rotate 90\u00b0"
 
 #endif  // PALA_LANG_EN_H
